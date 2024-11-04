@@ -1,0 +1,291 @@
+---
+title: "Annexe : Code du TP série temprelle"
+author: "Ahmed Khairaldin et Amine Razig"
+date: "17/5/2024"
+output: pdf_document
+---
+
+![](/Users/aminerazig/Desktop/LOGO-ENSAE.png)
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(factoextra)
+```
+
+  
+#              **Projet : Fabrication d’instruments et de fournitures à usage médical et dentaire**
+
+## \color{red}Bibliothèques nécessaires:
+
+```{r}
+if (!require("httr")) install.packages("httr")
+if (!require("ggplot2")) install.packages("ggplot2")
+library(httr)
+library(ggplot2)
+library(zoo)
+library(tseries)
+library(fUnitRoots)
+library(forecast)
+library(ellipse)
+```
+
+## \color{red}Import des données : 
+
+```{r}
+
+#Importation des données : de janvier 1990 à janvier 2008
+
+path <- "/Users/aminerazig/Desktop/ENSAE 2A/S2/Projet_Serie_temp/valeurs_mensuelles_dentaire.csv"
+data <- read.csv(path, sep = ";")
+```
+
+## \color{red}Manipulation des données : 
+
+```{r}
+data <- data[-(1:3), ]
+colnames(data) <- c("date", "valeur", "code")
+
+# Conversion du format de la date et des valeurs et suppressiin de la période liée au Covid :
+data$valeur <- as.numeric(data$valeur)
+
+# Création de la série au format zoo : 
+X = data[,2]
+X <- zoo(X)
+
+# Vue génarale de la série : 
+plot(X, type='l', col='aquamarine4', xlab="Période", ylab="Indice")
+```
+## TESTS POUR LA STATIONNARITE (serie initiale) : /!\ 0 lags ..
+```{r}
+
+adf.test(X)  
+```
+
+L’hypothese nulle de racine unitaire H0 : Betha = 0 est testée par une statistique qui suit une loi de Dickey-Fuller dépendant du nombre d’observation et du cas du test dans lequel on se place.
+Le test ADF donne :
+
+```{r}
+adf <- adfTest(X, lag=0, type="ct")  
+#Test ADF dans le cas avec constante et tendance. Avant d'interpréter le test, vérifions que les résidus du modèle de Régression ne sont bien pas autocorrélés, sinon le test ne serait pas valide.
+```
+
+```{r}
+resisuals = adf@test$lm$residuals
+
+```
+
+```{r}
+# Source : TD4 du cours de série temporelles
+
+# tests d’autocorrelation : 
+
+Qtests <- function(series, k, fitdf=0) {
+  pvals <- apply(matrix(1:k), 1, FUN=function(l) {
+                  pval <- if (l<=fitdf) NA else Box.test(series, lag=l, type="Ljung-Box", fitdf=fitdf)$p.value 
+  return(c("lag"=l,"pval"=pval))
+  })
+return(t(pvals))
+}
+
+
+Qtests(adf@test$lm$residuals,24,length(adf@test$lm$coefficients))
+```
+
+
+```{r}
+# Ajout d'un retard jusqu'a ce que les résidus soient non corrélés
+
+adfTest_valid <- function(series,kmax,type){ #tests ADF jusqu’a des residus non autocorrelles 
+k <- 0
+noautocorr <- 0
+while (noautocorr==0){
+cat(paste0("ADF with ",k, " lags: residuals OK? "))
+adf <- adfTest(series,lags=k,type=type)
+pvals <- Qtests(adf@test$lm$residuals,24,fitdf=length(adf@test$lm$coefficients))[,2]
+if (sum(pvals<0.05,na.rm=T) == 0) {
+noautocorr <- 1; cat("OK \n")}
+else cat("nope \n")
+k <- k + 1
+}
+return(adf)
+}
+
+adfTest_valid(X,24,'ct')
+```
+
+
+
+## Serie differenciée : 
+```{r}
+## **TENDANCE - Différenciation de la série  **
+#Differenciation et retranchement de la moyenne la série pour supprimer tendance
+
+diff_X = X - lag(X,1)
+X_diff_mean <- diff_X - mean(diff_X)
+
+plot(X_diff_mean,  col='aquamarine4', xlab="Période")
+
+
+```
+
+## TESTS POUR LA STATIONNARITE (serie differenciée ) :
+```{r}
+adfTest_valid(X_diff_mean,24,'ct')
+```
+
+
+### Justification du test ADF : 
+```{r}
+# Le test ADF a donc du sens : 
+adf_diff <- adfTest(X_diff_mean, lag=0, type="ct")
+
+Qtests(adf_diff@test$lm$residuals,24,length(adf_diff@test$lm$coefficients))
+```
+
+
+
+## TESTS POUR LA STATIONNARITE :
+```{r}
+pp.test(X_diff_mean)
+```
+
+
+# ----------------------------------------------------------------------------------------
+# **Partie II : Modèles ARMA**
+# ----------------------------------------------------------------------------------------
+
+## Sélection des ordres p et q de notre modèle : 
+
+```{r}
+acf(X_diff_mean,lag.max=15)
+pacf(X_diff_mean, lag.max=20)
+```
+
+Pour nous 
+ -            d* = 0 
+ -            q* = 1
+ -            p* = 3
+
+### 0n test donc tous les  modèles possible : (0,0,1), (1,0,1), (2,0,1),(3,0,1),(1,0,0), ...
+```{r}
+#test des significativités individuelles des coefficients : 
+signif <- function(estim){
+  coef <- estim$coef
+  se <- sqrt(diag(estim$var.coef))
+  t <- coef/se
+  pval <- (1-pnorm(abs(t)))*2
+  return(rbind(coef,se,pval))
+}
+arima201 <- arima(X_diff_mean,c(3,0,0))
+signif(arima201) #tests de siginificativite de l’ARIMA(2,0,1)
+```
+
+**Interpretation** : Les coefficients des retards les plus haut AR(2) ne rejette pas leur nullité à 95% (p-value>0.05), le modèle ARIMA(3,0,2) est donc mal ajusté. Pour MA(2) on rejette la nulité des coefficient. 
+
+```{r}
+##fonction d’affichage des tests pour la sélection du modèle ARIMA
+arimafit <- function(estim){
+  adjust <- round(signif(estim),3)
+  pvals <- Qtests(estim$residuals,24,length(estim$coef)-1)
+  pvals <- matrix(apply(matrix(1:24,nrow=6),2,function(c) round(pvals[c,],3)),nrow=6)
+  colnames(pvals) <- rep(c("lag", "pval"),4)
+  cat("tests de nullité des coefficients :\n")
+  print(adjust)
+  cat("\n tests d’absence d’autocorrélation des résidus : \n")
+  print(pvals)
+}
+```
+
+```{r}
+# EXEMPLE : 
+# Modele pas bien ajusté et non valide (absence de correlation est rejeté)
+estim <- arima(X_diff_mean,c(2,0,1)); arimafit(estim)
+```
+
+
+```{r}
+# POUR TOUTES LES COMBINAISONS : 
+for (p in 0:3) {
+  for (q in 0:1) {
+    cat(sprintf("\n\nARIMA(%d,0,%d):\n", p, q))
+    # Estimation du modèle ARIMA
+    estim <- arima(X_diff_mean,c(p,0,q)); arimafit(estim)
+  }
+}
+```
+
+
+Nos trois modeles ajustés et valides sont : 
+ARIMA(3,0,0) ; ARIMA(0,0,1)
+
+on peut utiliser un critère d’information, tel que l’AIC ou le BIC (qui dependent négativement de la log-vraisemblance du modele penalisee par le nombre de parametres a estimer) :
+
+```{r}
+ARIMA300= arima(X_diff_mean,c(3,0,0))
+ARIMA001= arima(X_diff_mean,c(0,0,1))
+
+
+models <- c("ARIMA300","ARIMA001"); names(models) <- models
+apply(as.matrix(models),1, function(m) c("AIC"=AIC(get(m)), "BIC"=BIC(get(m))))
+```
+
+**Conclusion** : Le ARIMA(0,0,1)  minimise à la fois le critère BIC et AIC donc ont peu le considérer comme ayant les meilleurs ordres et c'ets celui la qu'on retient. 
+
+# ----------------------------------------------------------------------------------------
+# Partie III : Prévision 
+# ----------------------------------------------------------------------------------------
+
+```{r}
+# On commence par ajuster le modele sélectioné : 
+model <- arima(X, c(0, 0,1))
+
+# On extrait les résidus du modèle
+residuals <- residuals(model)
+# QQ plot des résidus (pour savoir si ils suivent une loi normale)
+qqnorm(residuals, main = "QQ Plot of ARIMA(0,0,1) Residuals")
+qqline(residuals, col = "red")
+
+```
+## 8. Représenter graphiquement de la région pour alpha = 95% :
+```{r}
+
+# On determine le coef MA(1) :
+model_ma1 <- arima(X, order = c(0, 0, 1))
+ma1_coeff <- coef(model_ma1)["ma1"]
+
+theta <- ma1_coeff
+
+# Variance des résidus (bruit blanc)
+residuals_ma1 <- residuals(model_ma1)
+variance_residuals <- var(residuals_ma1)
+
+## On obtiens : 
+##  theta = 0.8323871 
+##  Variance du BB = 83.27074 
+
+# Calculer les éléments de la matrice Variance Covariance (Sigma)
+element11 <- variance_residuals
+element12 <- variance_residuals * (1 - theta)
+element21 <- variance_residuals * (1 - theta)
+element22 <- variance_residuals * (1 + (1 - theta)^2)
+
+# Créer la matrice Sigma et inversion 
+Sigma <- matrix(c(element11, element12, element21, element22), nrow=2, ncol=2, byrow=TRUE)
+Sigma_inverse <- solve(Sigma)
+
+# Prédiction des valeurs à T+1 et T+2 avec le modèle ARIMA(0,0,1)
+valeurs_pred <- predict(model_ma1, n.ahead=2)
+prediction_T1 <- valeurs_pred$pred[1]
+prediction_T2 <- valeurs_pred$pred[2]
+
+# On trace l'ellipse de confiance
+plot(ellipse(Sigma_inverse, centre=c(prediction_T1, prediction_T2), level=0.95),
+     xlab="Prédiction à T+1", ylab="Prédiction à T+2",
+     main="Ellipse de confiance pour ARIMA(0,0,1)")
+
+points(x=prediction_T1, y=prediction_T2, col="red", pch=19)
+legend("topright", legend="Prédictions", pch=19, col="red", cex=0.8)
+
+```
+
+
